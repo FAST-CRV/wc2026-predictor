@@ -104,8 +104,4 @@ wc2026-predictor/
 
 ---
 
-## ❓ Lưu ý
 
-- GitHub Actions **miễn phí** cho public repo (2000 phút/tháng free với private repo)
-- Chi phí Claude API: ~$0.003–0.01 mỗi lần chạy (rất rẻ)
-- Nếu hôm nay không có trận WC2026, bot sẽ báo "không có trận đấu"
