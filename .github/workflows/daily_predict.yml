@@ -3,7 +3,7 @@ name: WC2026 Daily Predictor
 on:
   schedule:
     # 14:00 Vietnam time = 07:00 UTC
-    - cron: "54 11 * * *"
+    - cron: "0 7 * * *"
   workflow_dispatch:  # cho phép chạy thủ công để test
 
 jobs:
