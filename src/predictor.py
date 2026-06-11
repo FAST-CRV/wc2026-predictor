@@ -2,118 +2,174 @@ import os
 import json
 import requests
 from datetime import datetime, timezone, timedelta
-from bs4 import BeautifulSoup
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-# Vietnam timezone (UTC+7)
 VN_TZ = timezone(timedelta(hours=7))
 
 
 def get_todays_matches():
-    """Scrape lịch thi đấu WC2026 hôm nay từ FlashScore"""
+    """Lấy lịch WC2026 từ openfootball/worldcup.json — free, no API key"""
     today = datetime.now(VN_TZ).strftime("%Y-%m-%d")
     print(f"📅 Tìm trận đấu ngày: {today}")
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json, text/plain, */*",
-    }
-
-    # Thử API của football-data.org (free tier)
     try:
-        url = "https://api.football-data.org/v4/competitions/WC/matches"
-        params = {"dateFrom": today, "dateTo": today, "status": "SCHEDULED,TIMED,IN_PLAY"}
-        resp = requests.get(url, headers={**headers, "X-Auth-Token": ""}, params=params, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            matches = []
-            for m in data.get("matches", []):
-                home = m["homeTeam"]["name"]
-                away = m["awayTeam"]["name"]
-                utc_time = m.get("utcDate", "")
-                try:
-                    dt = datetime.fromisoformat(utc_time.replace("Z", "+00:00"))
-                    local_time = dt.astimezone(VN_TZ).strftime("%H:%M")
-                except Exception:
-                    local_time = "TBD"
-                matches.append({
-                    "home": home,
-                    "away": away,
-                    "time": local_time,
-                    "stage": m.get("stage", "GROUP_STAGE"),
-                })
-            if matches:
-                return matches
-    except Exception as e:
-        print(f"⚠️ football-data.org lỗi: {e}")
+        url = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        matches = []
+        for m in data.get("matches", []):
+            match_date = m.get("date", "")
+            if match_date != today:
+                continue
+            # Parse giờ: "13:00 UTC-6" → giờ VN (UTC+7 = UTC-6 + 13h)
+            time_str = m.get("time", "")
+            try:
+                time_part, tz_part = time_str.split(" ")
+                h, mi = map(int, time_part.split(":"))
+                tz_offset = int(tz_part.replace("UTC", ""))
+                # Chuyển sang UTC rồi sang VN
+                utc_h = h - tz_offset
+                vn_h = (utc_h + 7) % 24
+                local_time = f"{vn_h:02d}:{mi:02d}"
+            except Exception:
+                local_time = "TBD"
 
-    # Fallback: scrape SofaScore
-    try:
-        url = f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{today}"
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            matches = []
-            for event in data.get("events", []):
-                tournament = event.get("tournament", {}).get("name", "")
-                if "world cup" in tournament.lower() or "FIFA" in tournament:
-                    home = event["homeTeam"]["name"]
-                    away = event["awayTeam"]["name"]
-                    ts = event.get("startTimestamp", 0)
-                    if ts:
-                        dt = datetime.fromtimestamp(ts, tz=VN_TZ)
-                        local_time = dt.strftime("%H:%M")
-                    else:
-                        local_time = "TBD"
-                    matches.append({
-                        "home": home,
-                        "away": away,
-                        "time": local_time,
-                        "stage": "World Cup 2026",
-                    })
-            if matches:
-                return matches
+            stage = m.get("group", m.get("round", "World Cup 2026"))
+            matches.append({
+                "home": m["team1"],
+                "away": m["team2"],
+                "time": local_time,
+                "stage": stage,
+            })
+        if matches:
+            print(f"✅ openfootball: {len(matches)} trận hôm nay")
+            return matches
+        print("⚠️ openfootball: không có trận hôm nay")
     except Exception as e:
-        print(f"⚠️ SofaScore lỗi: {e}")
+        print(f"⚠️ openfootball lỗi: {e}")
 
-    # Fallback hardcode lịch WC2026 vòng bảng (11/6 - 3/7/2026)
-    print("⚠️ Dùng lịch hardcode WC2026")
+    print("⚠️ Fallback hardcode")
     return get_hardcoded_schedule(today)
 
 
 def get_hardcoded_schedule(today: str):
-    """Lịch thi đấu WC2026 vòng bảng hardcode (các trận tiêu biểu)"""
+    # Tất cả giờ là giờ VN (UTC+7). ET+11 = VN
+    # Nguồn: ESPN / CBS Sports lịch chính thức WC2026
     schedule = {
-        # Ngày khai mạc
-        "2026-06-11": [{"home": "Mexico", "away": "Chile",       "time": "22:00", "stage": "Group A"},
-                       {"home": "USA",    "away": "Canada",      "time": "01:00", "stage": "Group B"}],
-        "2026-06-12": [{"home": "Brazil", "away": "Mexico",      "time": "22:00", "stage": "Group D"},
-                       {"home": "Argentina","away":"Ecuador",    "time": "02:00", "stage": "Group A"}],
-        "2026-06-13": [{"home": "France", "away": "Uruguay",     "time": "22:00", "stage": "Group E"},
-                       {"home": "Germany","away":"Japan",        "time": "02:00", "stage": "Group C"}],
-        "2026-06-14": [{"home": "Spain",  "away": "Morocco",     "time": "22:00", "stage": "Group H"},
-                       {"home": "England","away":"Iran",         "time": "02:00", "stage": "Group F"}],
-        "2026-06-15": [{"home": "Portugal","away":"South Korea", "time": "22:00", "stage": "Group G"},
-                       {"home": "Netherlands","away":"Senegal",  "time": "02:00", "stage": "Group I"}],
-        "2026-06-16": [{"home": "Italy",  "away": "Belgium",     "time": "02:00", "stage": "Group J"},
-                       {"home": "Croatia","away":"Colombia",     "time": "22:00", "stage": "Group K"}],
-        "2026-06-17": [{"home": "Argentina","away":"Saudi Arabia","time":"22:00", "stage": "Group B"},
-                       {"home": "Brazil", "away": "Japan",       "time": "02:00", "stage": "Group D"}],
-        "2026-06-18": [{"home": "France", "away": "Germany",     "time": "22:00", "stage": "Group C"},
-                       {"home": "Spain",  "away": "Netherlands", "time": "02:00", "stage": "Group H"}],
-        "2026-06-19": [{"home": "England","away":"USA",          "time": "22:00", "stage": "Group F"},
-                       {"home": "Portugal","away":"Uruguay",     "time": "02:00", "stage": "Group E"}],
-        "2026-06-20": [{"home": "Vietnam","away":"Saudi Arabia", "time": "22:00", "stage": "Group K"},
-                       {"home": "Australia","away":"Iran",       "time": "02:00", "stage": "Group L"}],
+        # ── VÒNG BẢNG ──
+        "2026-06-11": [
+            {"home": "Mexico",      "away": "South Africa", "time": "02:00", "stage": "Bảng A"},
+            {"home": "South Korea", "away": "Czechia",      "time": "09:00", "stage": "Bảng A"},
+        ],
+        "2026-06-12": [
+            {"home": "Canada",  "away": "Bosnia Herzegovina","time": "02:00", "stage": "Bảng B"},
+            {"home": "USA",     "away": "Paraguay",          "time": "08:00", "stage": "Bảng D"},
+        ],
+        "2026-06-13": [
+            {"home": "Qatar",      "away": "Switzerland",  "time": "02:00", "stage": "Bảng B"},
+            {"home": "Brazil",     "away": "Morocco",      "time": "05:00", "stage": "Bảng C"},
+            {"home": "Haiti",      "away": "Scotland",     "time": "08:00", "stage": "Bảng C"},
+            {"home": "Australia",  "away": "Turkiye",      "time": "11:00", "stage": "Bảng D"},
+        ],
+        "2026-06-14": [
+            {"home": "Germany",    "away": "Curacao",      "time": "00:00", "stage": "Bảng E"},
+            {"home": "Netherlands","away": "Japan",        "time": "03:00", "stage": "Bảng F"},
+            {"home": "Ivory Coast","away": "Ecuador",      "time": "06:00", "stage": "Bảng E"},
+            {"home": "Sweden",     "away": "Tunisia",      "time": "09:00", "stage": "Bảng F"},
+        ],
+        "2026-06-15": [
+            {"home": "Spain",        "away": "Cape Verde",  "time": "23:00", "stage": "Bảng H"},
+            {"home": "Belgium",      "away": "Egypt",       "time": "02:00", "stage": "Bảng G"},
+            {"home": "Saudi Arabia", "away": "Uruguay",     "time": "05:00", "stage": "Bảng H"},
+            {"home": "Iran",         "away": "New Zealand", "time": "08:00", "stage": "Bảng G"},
+        ],
+        "2026-06-16": [
+            {"home": "France",    "away": "Senegal",   "time": "02:00", "stage": "Bảng I"},
+            {"home": "Iraq",      "away": "Norway",    "time": "05:00", "stage": "Bảng I"},
+            {"home": "Argentina", "away": "Algeria",   "time": "08:00", "stage": "Bảng J"},
+            {"home": "Austria",   "away": "Jordan",    "time": "11:00", "stage": "Bảng J"},
+        ],
+        "2026-06-17": [
+            {"home": "Portugal",  "away": "DR Congo",  "time": "02:00", "stage": "Bảng K"},
+            {"home": "England",   "away": "Croatia",   "time": "05:00", "stage": "Bảng L"},
+            {"home": "Ghana",     "away": "Panama",    "time": "08:00", "stage": "Bảng L"},
+        ],
+        "2026-06-18": [
+            {"home": "Uzbekistan","away": "Colombia",     "time": "01:00", "stage": "Bảng K"},
+            {"home": "Czechia",   "away": "South Africa", "time": "23:00", "stage": "Bảng A"},
+            {"home": "Mexico",    "away": "South Korea",  "time": "23:00", "stage": "Bảng A"},
+        ],
+        "2026-06-19": [
+            {"home": "Switzerland","away": "Bosnia Herzegovina","time": "02:00", "stage": "Bảng B"},
+            {"home": "Canada",     "away": "Qatar",            "time": "05:00", "stage": "Bảng B"},
+            {"home": "Paraguay",   "away": "Australia",        "time": "23:00", "stage": "Bảng D"},
+            {"home": "USA",        "away": "Turkiye",          "time": "23:00", "stage": "Bảng D"},
+        ],
+        "2026-06-20": [
+            {"home": "Morocco",    "away": "Haiti",     "time": "02:00", "stage": "Bảng C"},
+            {"home": "Scotland",   "away": "Brazil",    "time": "05:00", "stage": "Bảng C"},
+            {"home": "Japan",      "away": "Sweden",    "time": "23:00", "stage": "Bảng F"},
+            {"home": "Tunisia",    "away": "Netherlands","time": "23:00", "stage": "Bảng F"},
+        ],
+        "2026-06-21": [
+            {"home": "Spain",    "away": "Saudi Arabia", "time": "23:00", "stage": "Bảng H"},
+            {"home": "Belgium",  "away": "Iran",         "time": "02:00", "stage": "Bảng G"},
+            {"home": "Uruguay",  "away": "Cape Verde",   "time": "05:00", "stage": "Bảng H"},
+            {"home": "Egypt",    "away": "New Zealand",  "time": "08:00", "stage": "Bảng G"},
+        ],
+        "2026-06-22": [
+            {"home": "Argentina","away": "Austria",  "time": "00:00", "stage": "Bảng J"},
+            {"home": "France",   "away": "Iraq",     "time": "04:00", "stage": "Bảng I"},
+            {"home": "Norway",   "away": "Senegal",  "time": "07:00", "stage": "Bảng I"},
+            {"home": "Jordan",   "away": "Algeria",  "time": "10:00", "stage": "Bảng J"},
+        ],
+        "2026-06-23": [
+            {"home": "Portugal",  "away": "Uzbekistan","time": "00:00", "stage": "Bảng K"},
+            {"home": "England",   "away": "Ghana",     "time": "03:00", "stage": "Bảng L"},
+            {"home": "Panama",    "away": "Croatia",   "time": "06:00", "stage": "Bảng L"},
+            {"home": "Colombia",  "away": "DR Congo",  "time": "09:00", "stage": "Bảng K"},
+        ],
+        "2026-06-24": [
+            {"home": "Switzerland","away": "Canada",              "time": "02:00", "stage": "Bảng B"},
+            {"home": "Bosnia Herzegovina","away": "Qatar",        "time": "02:00", "stage": "Bảng B"},
+            {"home": "Scotland",   "away": "Brazil",              "time": "05:00", "stage": "Bảng C"},
+            {"home": "Morocco",    "away": "Haiti",               "time": "05:00", "stage": "Bảng C"},
+            {"home": "Czechia",    "away": "Mexico",              "time": "08:00", "stage": "Bảng A"},
+            {"home": "South Africa","away": "South Korea",        "time": "08:00", "stage": "Bảng A"},
+        ],
+        "2026-06-25": [
+            {"home": "Ecuador",    "away": "Germany",      "time": "03:00", "stage": "Bảng E"},
+            {"home": "Curacao",    "away": "Ivory Coast",  "time": "03:00", "stage": "Bảng E"},
+            {"home": "Japan",      "away": "Sweden",       "time": "06:00", "stage": "Bảng F"},
+            {"home": "Tunisia",    "away": "Netherlands",  "time": "06:00", "stage": "Bảng F"},
+            {"home": "Turkiye",    "away": "USA",          "time": "09:00", "stage": "Bảng D"},
+            {"home": "Paraguay",   "away": "Australia",    "time": "09:00", "stage": "Bảng D"},
+        ],
+        "2026-06-26": [
+            {"home": "Norway",     "away": "France",       "time": "02:00", "stage": "Bảng I"},
+            {"home": "Senegal",    "away": "Iraq",         "time": "02:00", "stage": "Bảng I"},
+            {"home": "Algeria",    "away": "Argentina",    "time": "05:00", "stage": "Bảng J"},
+            {"home": "Jordan",     "away": "Austria",      "time": "05:00", "stage": "Bảng J"},
+            {"home": "Cape Verde", "away": "Saudi Arabia", "time": "07:00", "stage": "Bảng H"},
+            {"home": "Uruguay",    "away": "Spain",        "time": "07:00", "stage": "Bảng H"},
+        ],
+        "2026-06-27": [
+            {"home": "New Zealand","away": "Belgium",      "time": "02:00", "stage": "Bảng G"},
+            {"home": "Iran",       "away": "Egypt",        "time": "02:00", "stage": "Bảng G"},
+            {"home": "DR Congo",   "away": "Portugal",     "time": "05:00", "stage": "Bảng K"},
+            {"home": "Colombia",   "away": "Uzbekistan",   "time": "05:00", "stage": "Bảng K"},
+            {"home": "Croatia",    "away": "England",      "time": "08:00", "stage": "Bảng L"},
+            {"home": "Panama",     "away": "Ghana",        "time": "08:00", "stage": "Bảng L"},
+        ],
     }
     return schedule.get(today, [])
 
 
 def analyze_match_with_ai(home: str, away: str, stage: str) -> dict:
-    """Gọi Claude API để phân tích và dự đoán trận đấu"""
     prompt = f"""Bạn là chuyên gia phân tích bóng đá World Cup 2026.
 
 Trận đấu: {home} vs {away}
@@ -121,56 +177,54 @@ Giai đoạn: {stage}
 
 Hãy phân tích và dự đoán kết quả. Trả lời CHỈ bằng JSON hợp lệ (không markdown, không backtick):
 {{
-  "winner": "tên đội thắng hoặc 'Hòa'",
+  "winner": "tên đội thắng hoặc Hòa",
   "confidence": số từ 50 đến 82,
   "scoreline": "ví dụ 2-1",
   "home_win_pct": số,
   "draw_pct": số,
   "away_win_pct": số,
   "key_factors": ["yếu tố 1", "yếu tố 2", "yếu tố 3"],
-  "star_players": ["cầu thủ ngôi sao đội nhà", "cầu thủ ngôi sao đội khách"],
-  "analysis": "2-3 câu phân tích ngắn gọn bằng tiếng Việt về phong độ, chiến thuật, lý do dự đoán"
+  "analysis": "2-3 câu phân tích ngắn gọn bằng tiếng Việt"
 }}"""
 
-    response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
-        headers={"Content-Type": "application/json"},
-        json={"contents": [{"parts": [{"text": prompt}]}]},
-        timeout=30,
-    )
-    response.raise_for_status()
+    import time
+    for attempt in range(3):
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}",
+            headers={"Content-Type": "application/json"},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=30,
+        )
+        if response.status_code == 429:
+            print(f"  ⏳ Rate limit, chờ {15*(attempt+1)}s...")
+            time.sleep(15 * (attempt + 1))
+            continue
+        response.raise_for_status()
+        break
     data = response.json()
     raw = data["candidates"][0]["content"]["parts"][0]["text"]
-
-    # Parse JSON
     raw_clean = raw.replace("```json", "").replace("```", "").strip()
     try:
         return json.loads(raw_clean)
     except json.JSONDecodeError:
         import re
-        match = re.search(r"\{[\s\S]*\}", raw_clean)
-        if match:
-            return json.loads(match.group())
+        m = re.search(r"\{[\s\S]*\}", raw_clean)
+        if m:
+            return json.loads(m.group())
         raise ValueError(f"Không parse được JSON: {raw_clean[:200]}")
 
 
 def format_telegram_message(matches_results: list, today: str) -> str:
-    """Format tin nhắn Telegram đẹp"""
     date_fmt = datetime.strptime(today, "%Y-%m-%d").strftime("%d/%m/%Y")
     lines = [
         f"⚽ *DỰ ĐOÁN WORLD CUP 2026*",
         f"📅 {date_fmt} — {len(matches_results)} trận",
         "━━━━━━━━━━━━━━━━━━",
     ]
-
     for i, item in enumerate(matches_results, 1):
         match = item["match"]
         result = item["result"]
-        home = match["home"]
-        away = match["away"]
-        time = match["time"]
-        stage = match["stage"]
-
+        home, away = match["home"], match["away"]
         winner = result.get("winner", "?")
         score = result.get("scoreline", "?-?")
         conf = result.get("confidence", 0)
@@ -180,7 +234,6 @@ def format_telegram_message(matches_results: list, today: str) -> str:
         analysis = result.get("analysis", "")
         factors = result.get("key_factors", [])
 
-        # Xác định winner emoji
         if winner == home:
             winner_line = f"🏆 *{home}* thắng"
         elif winner == away:
@@ -188,87 +241,66 @@ def format_telegram_message(matches_results: list, today: str) -> str:
         else:
             winner_line = "🤝 *Hòa*"
 
-        # Confidence bar
         filled = round(conf / 10)
         bar = "🟩" * filled + "⬜" * (10 - filled)
 
         lines += [
             f"\n*{i}. {home} 🆚 {away}*",
-            f"🕐 {time} VN  |  {stage}",
+            f"🕐 {match['time']} VN  |  {match['stage']}",
             f"",
             f"{winner_line}  ({score})",
             f"{bar} {conf}%",
             f"",
             f"📊 {home}: {round(h_pct)}%  |  Hòa: {round(d_pct)}%  |  {away}: {round(a_pct)}%",
         ]
-
         if factors:
-            lines.append(f"")
-            lines.append(f"📌 Yếu tố chính:")
-            for f in factors[:3]:
-                lines.append(f"  • {f}")
-
+            lines += ["", "📌 Yếu tố chính:"] + [f"  • {f}" for f in factors[:3]]
         if analysis:
-            lines.append(f"")
-            lines.append(f"💬 _{analysis}_")
-
+            lines += ["", f"💬 _{analysis}_"]
         lines.append("━━━━━━━━━━━━━━━━━━")
 
-    lines += [
-        "",
-        "🤖 _Phân tích bởi Claude AI_",
-        "_⚠️ Dự đoán tham khảo, bóng đá luôn có bất ngờ!_",
-    ]
+    lines += ["", "🤖 _Phân tích bởi Gemini AI_",
+              "_⚠️ Dự đoán tham khảo, bóng đá luôn có bất ngờ!_"]
     return "\n".join(lines)
 
 
 def send_telegram(message: str):
-    """Gửi tin nhắn qua Telegram Bot API"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
+    resp = requests.post(url, json={
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
-    }
-    resp = requests.post(url, json=payload, timeout=15)
+    }, timeout=15)
     resp.raise_for_status()
     print(f"✅ Đã gửi Telegram: {resp.json().get('ok')}")
 
 
 def main():
     today = datetime.now(VN_TZ).strftime("%Y-%m-%d")
-    print(f"🚀 Bắt đầu chạy lúc {datetime.now(VN_TZ).strftime('%H:%M')} ngày {today}")
+    print(f"🚀 Bắt đầu {datetime.now(VN_TZ).strftime('%H:%M')} ngày {today}")
 
     matches = get_todays_matches()
-
     if not matches:
-        msg = f"⚽ *WORLD CUP 2026*\n📅 {datetime.now(VN_TZ).strftime('%d/%m/%Y')}\n\n😴 Hôm nay không có trận đấu nào."
-        send_telegram(msg)
-        print("Không có trận đấu hôm nay.")
+        send_telegram(f"⚽ *WORLD CUP 2026*\n📅 {datetime.now(VN_TZ).strftime('%d/%m/%Y')}\n\n😴 Hôm nay không có trận đấu nào.")
         return
 
-    print(f"📋 Tìm thấy {len(matches)} trận đấu")
-
+    print(f"📋 {len(matches)} trận đấu")
     results = []
     for match in matches:
-        print(f"🔍 Phân tích: {match['home']} vs {match['away']}...")
+        print(f"🔍 {match['home']} vs {match['away']}...")
         try:
             result = analyze_match_with_ai(match["home"], match["away"], match["stage"])
             results.append({"match": match, "result": result})
-            print(f"  → Dự đoán: {result.get('winner')} ({result.get('confidence')}%)")
+            print(f"  → {result.get('winner')} ({result.get('confidence')}%)")
         except Exception as e:
-            print(f"  ❌ Lỗi phân tích: {e}")
-            results.append({
-                "match": match,
-                "result": {"winner": "Không xác định", "confidence": 50,
-                           "scoreline": "?-?", "home_win_pct": 33,
-                           "draw_pct": 34, "away_win_pct": 33,
-                           "analysis": "Không thể phân tích lúc này."}
-            })
+            print(f"  ❌ Lỗi: {e}")
+            results.append({"match": match, "result": {
+                "winner": "Không xác định", "confidence": 50,
+                "scoreline": "?-?", "home_win_pct": 33, "draw_pct": 34, "away_win_pct": 33,
+                "analysis": "Không thể phân tích lúc này."}})
 
-    message = format_telegram_message(results, today)
-    send_telegram(message)
+    send_telegram(format_telegram_message(results, today))
     print("🎉 Hoàn thành!")
 
 
