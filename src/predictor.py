@@ -202,7 +202,16 @@ Hãy phân tích và dự đoán kết quả. Trả lời CHỈ bằng JSON hợ
         response.raise_for_status()
         break
     data = response.json()
-    raw = data["candidates"][0]["content"]["parts"][0]["text"]
+    # Debug nếu không có candidates
+    if "candidates" not in data:
+        error_msg = data.get("error", {}).get("message", str(data))
+        raise ValueError(f"Gemini không trả candidates: {error_msg}")
+    candidate = data["candidates"][0]
+    # Kiểm tra finish_reason
+    finish_reason = candidate.get("finishReason", "")
+    if finish_reason in ("SAFETY", "RECITATION"):
+        raise ValueError(f"Gemini bị chặn bởi safety filter: {finish_reason}")
+    raw = candidate["content"]["parts"][0]["text"]
     raw_clean = raw.replace("```json", "").replace("```", "").strip()
     try:
         return json.loads(raw_clean)
