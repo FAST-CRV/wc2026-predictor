@@ -119,16 +119,30 @@ def load_match_history() -> list:
     return list(csv.DictReader(io.StringIO(resp.text)))
 
 
+def get_dates_to_fetch() -> list:
+    """Thứ 6 → lấy 4 ngày (T6+T7+CN+T2), các ngày khác → chỉ hôm nay"""
+    now = datetime.now(VN_TZ)
+    weekday = now.weekday()  # 0=T2 ... 4=T6
+    if weekday == 4:  # Thứ 6
+        return [(now + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(4)]
+    return [now.strftime("%Y-%m-%d")]
+
+
 def get_todays_matches() -> list:
-    today = datetime.now(VN_TZ).strftime("%Y-%m-%d")
-    print(f"📅 Lấy lịch thi đấu ngày {today}")
+    dates = get_dates_to_fetch()
+    if len(dates) > 1:
+        print(f"📅 Thứ 6 — lấy lịch {len(dates)} ngày: {dates[0]} → {dates[-1]}")
+    else:
+        print(f"📅 Lấy lịch thi đấu ngày {dates[0]}")
+
     url = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
     data = resp.json()
+
     matches = []
     for m in data.get("matches", []):
-        if m.get("date") != today:
+        if m.get("date") not in dates:
             continue
         time_str = m.get("time", "")
         try:
@@ -142,9 +156,11 @@ def get_todays_matches() -> list:
         matches.append({
             "home": m["team1"], "away": m["team2"],
             "time": local_time,
+            "date": m.get("date"),
             "stage": m.get("group", m.get("round", "World Cup 2026")),
         })
-    print(f"✅ {len(matches)} trận hôm nay")
+
+    print(f"✅ {len(matches)} trận")
     return matches
 
 
@@ -166,7 +182,7 @@ Viết 2 câu nhận xét ngắn tiếng Việt về trận này và dự đoán
     import time
     for attempt in range(3):
         resp = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={GEMINI_API_KEY}",
             headers={"Content-Type": "application/json"},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=30,
@@ -193,14 +209,32 @@ Viết 2 câu nhận xét ngắn tiếng Việt về trận này và dự đoán
 
 # ── FORMAT & GỬI TELEGRAM ───────────────────────────────
 def format_message(results: list, today: str) -> str:
-    date_fmt = datetime.strptime(today, "%Y-%m-%d").strftime("%d/%m/%Y")
+    # Group theo ngày nếu có nhiều ngày (cuối tuần)
+    dates = sorted(set(item["match"].get("date", today) for item in results))
+    multi_day = len(dates) > 1
+    if multi_day:
+        date_range = f"{datetime.strptime(dates[0], '%Y-%m-%d').strftime('%d/%m')} - {datetime.strptime(dates[-1], '%Y-%m-%d').strftime('%d/%m/%Y')}"
+        header = f"📅 {date_range} (T6→T2) — {len(results)} trận"
+    else:
+        header = f"📅 {datetime.strptime(today, '%Y-%m-%d').strftime('%d/%m/%Y')} — {len(results)} trận"
+
     lines = [f"⚽ *DỰ ĐOÁN WORLD CUP 2026*",
-             f"📅 {date_fmt} — {len(results)} trận",
+             header,
              "━━━━━━━━━━━━━━━━━━"]
+
+    current_date = None
 
     for i, item in enumerate(results, 1):
         m = item["match"]
         r = item["result"]
+        # Hiển thị header ngày mới khi có nhiều ngày
+        match_date = m.get("date", today)
+        if multi_day and match_date != current_date:
+            current_date = match_date
+            day_names = {0:"Thứ 2",1:"Thứ 3",2:"Thứ 4",3:"Thứ 5",4:"Thứ 6",5:"Thứ 7",6:"Chủ Nhật"}
+            dt = datetime.strptime(match_date, "%Y-%m-%d")
+            day_label = day_names[dt.weekday()]
+            lines += [f"", f"📆 *{day_label} {dt.strftime('%d/%m')}*"]
         home, away = m["home"], m["away"]
         probs = r["probs"]
         ai = r["ai"]
