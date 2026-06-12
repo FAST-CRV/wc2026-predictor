@@ -1,15 +1,53 @@
+# name: WC2026 Daily Predictor
+
+# on:
+#   schedule:
+#     # 14:00 Vietnam time = 07:00 UTC
+#     - cron: "9 3 * * *"
+#   workflow_dispatch:  # cho phép chạy thủ công để test
+
+# jobs:
+#   predict:
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       - name: Checkout repo
+#         uses: actions/checkout@v4
+
+#       - name: Setup Python
+#         uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.11"
+
+#       - name: Install dependencies
+#         run: pip install requests beautifulsoup4
+
+#       - name: Run predictor
+#         env:
+#           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+#           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+#           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+#         run: python src/predictor.py
+
+
+
+
+
 name: WC2026 Daily Predictor
 
 on:
   schedule:
-    # 14:00 Vietnam time = 07:00 UTC
-    - cron: "9 3 * * *"
-  workflow_dispatch:  # cho phép chạy thủ công để test
+    - cron: "9 2 * * *"   # 09:09 VN tự động hằng ngày
+  workflow_dispatch:
+    inputs:
+      predict_date:
+        description: "Ngày dự đoán (YYYY-MM-DD), để trống = hôm nay"
+        required: false
+        default: ""
 
 jobs:
   predict:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -27,4 +65,5 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PREDICT_DATE: ${{ github.event.inputs.predict_date }}
         run: python src/predictor.py
