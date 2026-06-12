@@ -88,8 +88,33 @@ def load_match_history() -> list:
     return list(csv.DictReader(io.StringIO(resp.text)))
 
 
+def parse_match_to_vn(m: dict) -> dict:
+    """Chuyển trận đấu sang ngày + giờ Việt Nam thực tế"""
+    date_str = m.get("date", "")
+    time_str = m.get("time", "")
+    try:
+        tp, tz_p = time_str.split(" ")
+        h, mi = map(int, tp.split(":"))
+        tz_off = int(tz_p.replace("UTC", ""))
+        utc_h = h - tz_off          # giờ UTC
+        vn_h = (utc_h + 7) % 24     # giờ VN
+        day_offset = (utc_h + 7) // 24  # sang ngày hôm sau nếu = 1
+        base = datetime.strptime(date_str, "%Y-%m-%d")
+        vn_date = (base + timedelta(days=day_offset)).strftime("%Y-%m-%d")
+        local_time = f"{vn_h:02d}:{mi:02d}"
+    except Exception:
+        vn_date = date_str
+        local_time = "TBD"
+    return {
+        "home": m["team1"], "away": m["team2"],
+        "time": local_time,
+        "date_vn": vn_date,
+        "stage": m.get("group", m.get("round", "World Cup 2026")),
+    }
+
+
 def get_dates_to_fetch() -> list:
-    """Ưu tiên PREDICT_DATE → thứ 6 lấy 4 ngày → mặc định hôm nay"""
+    """PREDICT_DATE env → thứ 6 lấy 4 ngày → mặc định hôm nay (theo giờ VN)"""
     predict_date = os.environ.get("PREDICT_DATE", "").strip()
     if predict_date:
         print(f"📌 Chạy thủ công: {predict_date}")
@@ -105,26 +130,17 @@ def get_matches(dates: list) -> list:
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
     data = resp.json()
+
     matches = []
     for m in data.get("matches", []):
-        if m.get("date") not in dates:
-            continue
-        time_str = m.get("time", "")
-        try:
-            tp, tz_p = time_str.split(" ")
-            h, mi = map(int, tp.split(":"))
-            tz_off = int(tz_p.replace("UTC", ""))
-            vn_h = (h - tz_off + 7) % 24
-            local_time = f"{vn_h:02d}:{mi:02d}"
-        except Exception:
-            local_time = "TBD"
-        matches.append({
-            "home": m["team1"], "away": m["team2"],
-            "time": local_time, "date": m.get("date"),
-            "stage": m.get("group", m.get("round", "World Cup 2026")),
-        })
-    # Sắp xếp theo ngày rồi theo giờ VN
-    matches.sort(key=lambda x: (x["date"], x["time"]))
+        parsed = parse_match_to_vn(m)
+        # Lọc theo ngày VN thực tế (không phải ngày gốc UTC)
+        if parsed["date_vn"] in dates:
+            matches.append(parsed)
+
+    # Sắp xếp theo ngày VN rồi giờ VN
+    matches.sort(key=lambda x: (x["date_vn"], x["time"]))
+    print(f"✅ {len(matches)} trận (theo giờ VN)")
     return matches
 
 
@@ -162,14 +178,13 @@ Viết 2 câu nhận xét ngắn tiếng Việt. Chỉ trả lời JSON:
         return json.loads(raw)
     except Exception:
         import re
-        m = re.search(r"\{[\s\S]*\}", raw)
-        return json.loads(m.group()) if m else {"comment": raw[:100], "scoreline": "?-?", "confidence": 50}
+        match = re.search(r"\{[\s\S]*\}", raw)
+        return json.loads(match.group()) if match else {"comment": "", "scoreline": "?-?", "confidence": 50}
 
 
 def format_message(results: list, dates: list) -> str:
-    import time as t
-    multi = len(dates) > 1
     day_names = {0:"Thứ 2",1:"Thứ 3",2:"Thứ 4",3:"Thứ 5",4:"Thứ 6",5:"Thứ 7",6:"Chủ Nhật"}
+    multi = len(dates) > 1
 
     if multi:
         d0 = datetime.strptime(dates[0], "%Y-%m-%d").strftime("%d/%m")
@@ -178,7 +193,7 @@ def format_message(results: list, dates: list) -> str:
     else:
         header = f"📅 {datetime.strptime(dates[0], '%Y-%m-%d').strftime('%d/%m/%Y')} — {len(results)} trận"
 
-    lines = [f"⚽ *DỰ ĐOÁN WORLD CUP 2026*", header, "━━━━━━━━━━━━━━━━━━"]
+    lines = ["⚽ *DỰ ĐOÁN WORLD CUP 2026*", header, "━━━━━━━━━━━━━━━━━━"]
 
     current_date = None
     for i, item in enumerate(results, 1):
@@ -188,24 +203,26 @@ def format_message(results: list, dates: list) -> str:
         probs = r["probs"]
         ai = r["ai"]
 
-        # Header ngày mới (khi nhiều ngày)
-        if multi and m["date"] != current_date:
-            current_date = m["date"]
+        # Header ngày mới
+        if multi and m["date_vn"] != current_date:
+            current_date = m["date_vn"]
             dt = datetime.strptime(current_date, "%Y-%m-%d")
             lines += ["", f"📆 *{day_names[dt.weekday()]} {dt.strftime('%d/%m')}*"]
 
         h_pct, d_pct, a_pct = probs["home_win_pct"], probs["draw_pct"], probs["away_win_pct"]
-        winner_line = f"🏆 *{home}* thắng" if h_pct > a_pct else (f"🏆 *{away}* thắng" if a_pct > h_pct else "🤝 *Hòa*")
+        winner_line = (f"🏆 *{home}* thắng" if h_pct > a_pct
+                       else f"🏆 *{away}* thắng" if a_pct > h_pct
+                       else "🤝 *Hòa*")
         conf = ai.get("confidence", round(max(h_pct, a_pct)))
         bar = "🟩" * round(conf/10) + "⬜" * (10 - round(conf/10))
 
         lines += [
             f"\n*{i}. {home} 🆚 {away}*",
             f"🕐 {m['time']} VN  |  {m['stage']}",
-            f"",
+            "",
             f"{winner_line}  ({ai.get('scoreline','?-?')})",
             f"{bar} {conf}%",
-            f"",
+            "",
             f"📊 {home}: {h_pct}%  |  Hòa: {d_pct}%  |  {away}: {a_pct}%",
             f"🔢 ELO: {home} *{round(r['elo_home'])}* vs {away} *{round(r['elo_away'])}*",
             f"📈 Form: {home} `{r['form_home']}`  |  {away} `{r['form_away']}`",
@@ -230,8 +247,7 @@ def send_telegram(message: str):
 
 def main():
     import time
-    now_str = datetime.now(VN_TZ).strftime("%H:%M ngày %Y-%m-%d")
-    print(f"🚀 Bắt đầu {now_str}")
+    print(f"🚀 Bắt đầu {datetime.now(VN_TZ).strftime('%H:%M ngày %Y-%m-%d')}")
 
     print("📥 Tải lịch sử kết quả...")
     history = load_match_history()
@@ -242,7 +258,7 @@ def main():
 
     dates = get_dates_to_fetch()
     matches = get_matches(dates)
-    print(f"📋 {len(matches)} trận: {dates}")
+    print(f"📋 {len(matches)} trận ngày {dates}")
 
     if not matches:
         send_telegram(f"⚽ *WORLD CUP 2026*\n📅 {dates[0]}\n\n😴 Không có trận đấu.")
@@ -251,10 +267,11 @@ def main():
     results = []
     for idx, match in enumerate(matches):
         home, away = match["home"], match["away"]
-        print(f"🔍 {home} vs {away}...")
+        print(f"🔍 {home} vs {away} ({match['date_vn']} {match['time']} VN)...")
 
         if idx > 0:
-            time.sleep(12)  # tránh rate limit Gemini
+            print(f"  ⏸ Chờ 20s...")
+            time.sleep(20)
 
         elo_h = elo_ratings.get(home, DEFAULT_ELO)
         elo_a = elo_ratings.get(away, DEFAULT_ELO)
