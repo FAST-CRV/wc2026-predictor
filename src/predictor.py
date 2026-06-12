@@ -306,8 +306,9 @@ def main():
         send_telegram(f"⚽ *WORLD CUP 2026*\n📅 {datetime.now(VN_TZ).strftime('%d/%m/%Y')}\n\n😴 Hôm nay không có trận đấu.")
         return
 
+    import time
     results = []
-    for match in matches:
+    for idx, match in enumerate(matches):
         home, away = match["home"], match["away"]
         print(f"🔍 {home} vs {away}...")
 
@@ -319,6 +320,11 @@ def main():
 
         print(f"  ELO: {home}={round(elo_h)} | {away}={round(elo_a)}")
         print(f"  Xác suất: {probs}")
+
+        # Sleep giữa các trận để tránh Gemini rate limit
+        if idx > 0:
+            print(f"  ⏸ Chờ 12s tránh rate limit...")
+            time.sleep(12)
 
         try:
             ai = analyze_with_gemini(home, away, elo_h, elo_a, form_h, form_a, probs)
