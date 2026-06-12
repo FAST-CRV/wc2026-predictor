@@ -105,5 +105,6 @@ wc2026-predictor/
 ---
 
 <!-- updated -->
+<!-- trigger cron -->
 
 
