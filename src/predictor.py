@@ -182,7 +182,7 @@ Viết 2 câu nhận xét ngắn tiếng Việt về trận này và dự đoán
     import time
     for attempt in range(3):
         resp = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={GEMINI_API_KEY}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}",
             headers={"Content-Type": "application/json"},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=30,
